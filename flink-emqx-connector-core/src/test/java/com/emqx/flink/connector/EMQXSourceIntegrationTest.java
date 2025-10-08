@@ -185,7 +185,7 @@ class EMQXSourceIntegrationTests {
                 JobClient jobClient = env.executeAsync();
 
                 waitUntilRunning(jobClient);
-                Thread.sleep(1000);  // Give more time for MQTT connection to stabilize
+                // Thread.sleep(1000);  // Give more time for MQTT connection to stabilize
 
                 MqttAsyncClient client = startClient(brokerHost, brokerPort);
                 String topic = "t/1";
@@ -197,7 +197,6 @@ class EMQXSourceIntegrationTests {
                         MqttMessage message = new MqttMessage(String.valueOf(n).getBytes());
                         message.setQos(qos);
                         client.publish(topic, message).waitForCompletion();
-                        Thread.sleep(100);  // Small delay between messages
                 }
                 // With Paho auto-ack, we expect at least 3 messages (shared subscription distributes them)
                 CommonTestUtils.waitUntilCondition(() -> sink.getCount() >= 3, 500L, 10);
@@ -365,11 +364,11 @@ class EMQXSourceIntegrationTests {
                         source.sinkTo(sink);
                         JobClient jobClient = env.executeAsync();
 
-                        Thread.sleep(3_000L);  // Wait longer for reconnection attempts
+                        Thread.sleep(2_000L);  // Wait longer for reconnection attempts
 
                         emqx.getDockerClient().unpauseContainerCmd(emqx.getContainerId()).exec();
 
-                        Thread.sleep(2_000L);  // Give time for MQTT to reconnect
+                        // Thread.sleep(2_000L);  // Give time for MQTT to reconnect
 
                         waitUntilRunning(jobClient);
 
@@ -378,7 +377,7 @@ class EMQXSourceIntegrationTests {
                         // Subscribe for debugging
                         client.subscribe(topicFilter, qos).waitForCompletion();
 
-                        Thread.sleep(500);  // Let subscription stabilize
+                        // Thread.sleep(500);  // Let subscription stabilize
 
                         List<String> msgs = IntStream.range(0, 10).mapToObj(String::valueOf)
                                         .collect(Collectors.toList());
@@ -386,7 +385,6 @@ class EMQXSourceIntegrationTests {
                                 MqttMessage message = new MqttMessage(msg.getBytes());
                                 message.setQos(qos);
                                 client.publish(topic, message).waitForCompletion();
-                                Thread.sleep(50);
                         }
 
                         // More lenient: expect at least the messages
