@@ -1,15 +1,15 @@
 package com.emqx.flink.connector;
 
-import com.hivemq.client.mqtt.mqtt5.datatypes.Mqtt5UserProperties;
+import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
 
 public class EMQXMessage<PAYLOAD> {
     public String topic;
     public int qos;
     public boolean retained;
-    public Mqtt5UserProperties properties;
+    public MqttProperties properties;
     public PAYLOAD payload;
 
-    public EMQXMessage(String topic, int qos, boolean retained, Mqtt5UserProperties properties, PAYLOAD payload) {
+    public EMQXMessage(String topic, int qos, boolean retained, MqttProperties properties, PAYLOAD payload) {
         this.topic = topic;
         this.qos = qos;
         this.retained = retained;

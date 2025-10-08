@@ -8,21 +8,29 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.ParameterTool;
 
 import com.emqx.flink.connector.EMQXMessage;
 import com.emqx.flink.connector.EMQXSource;
 
 public class WordCount {
     public static void main(String[] args) throws Exception {
+        // Get the Parameters from the command line
+        ParameterTool params = ParameterTool.fromArgs(args);
+        String brokerHost = params.get("host", "emqx1.emqx.net");
+        int brokerPort = params.getInt("port", 1883);
+        String clientid = params.get("clientid", "cid");
+        String userName = params.get("username", null);
+        String password = params.get("password", null);
+        String groupName = params.get("groupname", "gname");
+        String topicFilter = params.get("topic", "t/#");
+        int qos = params.getInt("qos", 1);
+
+        // Flink environment setup
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        String brokerHost = "emqx1.emqx.net";
-        int brokerPort = 1883;
-        String clientid = "cid";
-        String groupName = "gname";
-        String topicFilter = "t/#";
-        int qos = 1;
+
         DeserializationSchema<String> deserializer = new StringDeserializer();
-        EMQXSource<String> emqx = new EMQXSource<>(brokerHost, brokerPort, clientid, groupName, topicFilter, qos,
+        EMQXSource<String> emqx = new EMQXSource<>(brokerHost, brokerPort, clientid, userName, password, groupName, topicFilter, qos,
                 deserializer);
         DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqx, WatermarkStrategy.noWatermarks(), "emqx");
         KeyedStream<Tuple2<String, Integer>, String> keyedStream = source
