@@ -254,7 +254,7 @@ class EMQXSourceIntegrationTests {
 
         @Disabled("Paho MQTT v5 auto-acknowledges messages, so crash recovery behavior is different")
         @ParameterizedTest(name = "Message QoS = {arguments}")
-        @ValueSource(ints = { 1 })
+        @ValueSource(ints = { 1, 2 })
         public void recoverAfterFailure(int qos) throws Exception {
                 final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
                 env.setParallelism(1);
