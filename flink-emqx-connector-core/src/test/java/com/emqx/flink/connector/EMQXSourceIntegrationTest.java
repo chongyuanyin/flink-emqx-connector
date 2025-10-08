@@ -115,7 +115,7 @@ class EMQXSourceIntegrationTests {
                 String broker = String.format("tcp://%s:%d", brokerHost, brokerPort);
                 String clientId = "test-publisher-" + System.currentTimeMillis();
                 MqttAsyncClient client = new MqttAsyncClient(broker, clientId);
-                
+
                 client.setCallback(new MqttCallback() {
                         @Override
                         public void disconnected(MqttDisconnectResponse disconnectResponse) {
@@ -146,11 +146,11 @@ class EMQXSourceIntegrationTests {
                         public void authPacketArrived(int reasonCode, MqttProperties properties) {
                         }
                 });
-                
+
                 MqttConnectionOptions options = new MqttConnectionOptions();
                 options.setCleanStart(true);
                 options.setAutomaticReconnect(true);
-                
+
                 client.connect(options).waitForCompletion();
                 return client;
         }
@@ -191,7 +191,7 @@ class EMQXSourceIntegrationTests {
                 String topic = "t/1";
                 // Subscribe for debugging
                 client.subscribe(topicFilter, qos).waitForCompletion();
-                
+
                 int[] ns = { 1, 2, 3 };
                 for (int n : ns) {
                         MqttMessage message = new MqttMessage(String.valueOf(n).getBytes());
@@ -236,7 +236,7 @@ class EMQXSourceIntegrationTests {
                 String topic = "t/1";
                 // Subscribe for debugging
                 client.subscribe(topicFilter, qos).waitForCompletion();
-                
+
                 List<String> msgs = IntStream.range(0, 10).mapToObj(String::valueOf).collect(Collectors.toList());
                 for (String msg : msgs) {
                         MqttMessage message = new MqttMessage(msg.getBytes());
@@ -252,7 +252,6 @@ class EMQXSourceIntegrationTests {
                 client.close();
         }
 
-        @Disabled("Paho MQTT v5 auto-acknowledges messages, so crash recovery behavior is different")
         @ParameterizedTest(name = "Message QoS = {arguments}")
         @ValueSource(ints = { 1, 2 })
         public void recoverAfterFailure(int qos) throws Exception {
@@ -283,7 +282,7 @@ class EMQXSourceIntegrationTests {
                 String topic = "t/1";
                 // Subscribe for debugging
                 client.subscribe(topicFilter, qos).waitForCompletion();
-                
+
                 List<String> msgs = IntStream.range(0, 10).mapToObj(String::valueOf).collect(Collectors.toList());
                 for (String msg : msgs) {
                         MqttMessage message = new MqttMessage(msg.getBytes());
@@ -330,7 +329,7 @@ class EMQXSourceIntegrationTests {
                 // Should replay the same un-acked messages as before the crash.
                 org.apache.flink.core.testutils.CommonTestUtils.waitUtil(() -> sink2.getCount() == msgs.size(),
                                 Duration.ofMillis(2_500L), Duration.ofMillis(500L),
-                                String.format("final count: %d", sink2.getCount()));
+                                String.format("final count (qos %d): %d", qos, sink2.getCount()));
 
                 jobClient2.cancel().join();
         }
@@ -365,7 +364,7 @@ class EMQXSourceIntegrationTests {
                         Thread.sleep(3_000L);  // Wait longer for reconnection attempts
 
                         emqx.getDockerClient().unpauseContainerCmd(emqx.getContainerId()).exec();
-                        
+
                         Thread.sleep(2_000L);  // Give time for MQTT to reconnect
 
                         waitUntilRunning(jobClient);
@@ -374,9 +373,9 @@ class EMQXSourceIntegrationTests {
                         String topic = "t/1";
                         // Subscribe for debugging
                         client.subscribe(topicFilter, qos).waitForCompletion();
-                        
+
                         Thread.sleep(500);  // Let subscription stabilize
-                        
+
                         List<String> msgs = IntStream.range(0, 10).mapToObj(String::valueOf)
                                         .collect(Collectors.toList());
                         for (String msg : msgs) {
