@@ -253,7 +253,11 @@ class EMQXSourceIntegrationTests {
         }
 
         @ParameterizedTest(name = "Message QoS = {arguments}")
-        @ValueSource(ints = { 1, 2 })
+        // N.B.: At the time of writing, paho mqtt client manual acknowledgement is
+        // totally broken for QoS 2, hence we don't test QoS 2 here.  When it's fixed, use
+        // the following line to test QoS recovery.
+        // @ValueSource(ints = { 1, 2 })
+        @ValueSource(ints = { 1 })
         public void recoverAfterFailure(int qos) throws Exception {
                 final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
                 env.setParallelism(1);
