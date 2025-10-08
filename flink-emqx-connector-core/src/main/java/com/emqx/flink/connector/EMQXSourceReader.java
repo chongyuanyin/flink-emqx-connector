@@ -126,14 +126,6 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
                 LOG.info("Connect complete for client {}. Reconnect: {}", clientid, reconnect);
-                if (reconnect) {
-                    // Resubscribe after reconnection
-                    try {
-                        subscribeToTopic(client, groupName, topicFilter, qos);
-                    } catch (MqttException e) {
-                        LOG.error("Error resubscribing after reconnect", e);
-                    }
-                }
             }
 
             @Override
