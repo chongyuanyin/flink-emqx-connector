@@ -47,18 +47,16 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
     private String clientid;
     private String username;
     private String password;
-    private String groupName;
-    private String topicFilter;
-    private int qos;
     private DeserializationSchema<OUT> deserializer;
     private List<EMQXSourceSplit> splits = new ArrayList<>();
+    private List<EMQXSourceSplit> pendingSplits = new ArrayList<>();
     // list of received message ids pending ack
     private final List<Tuple2<Integer, Integer>> msgsToAck = new ArrayList<>();
     private final SortedMap<Long, List<Tuple2<Integer, Integer>>> checkpointsToMsgsToAck;
 
-    EMQXSourceReader(SourceReaderContext context, String brokerHost, int brokerPort, String clientid,
-            String username, String password, String groupName,
-            String topicFilter, int qos,
+    EMQXSourceReader(
+            SourceReaderContext context, String brokerHost, int brokerPort, String clientid,
+            String username, String password,
             DeserializationSchema<OUT> deserializer) {
         this.context = context;
         this.brokerHost = brokerHost;
@@ -66,9 +64,6 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
         this.clientid = clientid;
         this.username = username;
         this.password = password;
-        this.groupName = groupName;
-        this.topicFilter = topicFilter;
-        this.qos = qos;
         this.deserializer = deserializer;
         this.checkpointsToMsgsToAck = Collections.synchronizedSortedMap(new TreeMap<>());
     }
@@ -95,7 +90,6 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
     }
 
     MqttAsyncClient startClient(String host, int port, String clientid, String username, String password,
-            String groupName, String topicFilter, int qos,
             DeserializationSchema<OUT> deserializer) throws MqttException {
 
         String broker = String.format("tcp://%s:%d", host, port);
@@ -151,33 +145,55 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
         LOG.info("Connecting MQTT client for {}", clientid);
 
         // Connect and subscribe
+        // TODO: must schedule a retry if this fails, since automatic reconnect only
+        // works after initial connection...
         client.connect(options).waitForCompletion();
         LOG.info("MQTT client for {} connected", clientid);
 
-        // Subscribe to topic
-        subscribeToTopic(client, groupName, topicFilter, qos);
+        // Subscribe to topics
+        // TODO: should check CONNACK for session presence and skip subscribing if present.
+        Iterator<EMQXSourceSplit> iter = pendingSplits.iterator();
+        EMQXSourceSplit split;
+        while (iter.hasNext()) {
+            split = iter.next();
+            if (subscribeToTopic(client, split.topic, split.qos)) {
+                iter.remove();
+            } else {
+                // TODO: schedule retry
+            }
+        }
 
         return client;
     }
 
-    private void subscribeToTopic(MqttAsyncClient client, String groupName, String topicFilter, int qos)
-            throws MqttException {
-        String subTopic = "$share/" + groupName + "/" + topicFilter;
-        LOG.info("Subscribing to topic filter {}", subTopic);
-        client.subscribe(subTopic, qos).waitForCompletion();
-        LOG.info("Subscribed to topic filter {}", subTopic);
+    private boolean subscribeToTopic(MqttAsyncClient client, String topicFilter, int qos) {
+        LOG.info("Subscribing to topic filter {}", topicFilter);
+        // do we need to check for success (suback with RC success)?
+        try {
+            client.subscribe(topicFilter, qos).waitForCompletion();
+            LOG.info("Subscribed to topic filter {}", topicFilter);
+            return true;
+        } catch (MqttException e) {
+            LOG.error("client {} failed to subscribe to {} (qos {})", clientid, topicFilter, qos, e);
+            return false;
+        }
     }
 
     @Override
     public void start() {
-        // Request a split assignment from the enumerator
-        // context.sendSplitRequest();
+        LOG.debug("starting client {}; splits: {}", clientid, splits);
+        if (splits.size() == 0) {
+            // Starting for the first time, or recovering without ever having received a
+            // split.
+            LOG.info("client {} has no splits; requesting", clientid);
+            context.sendSplitRequest();
+        }
 
         try {
-            client = startClient(brokerHost, brokerPort, clientid, username, password, groupName, topicFilter, qos,
-                    deserializer);
+            client = startClient(brokerHost, brokerPort, clientid, username, password, deserializer);
         } catch (Exception e) {
             LOG.error("Error starting client {}", clientid, e);
+            // TODO: schedule retry
         }
     }
 
@@ -192,8 +208,25 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
 
     @Override
     public void addSplits(List<EMQXSourceSplit> splits) {
-        LOG.debug("Adding splits for clientid {}; splits: {}", clientid, splits);
+        // Called before `start()` if restoring state, after if we are starting for the
+        // first time.
+        LOG.info("Adding splits for clientid {}; splits: {}", clientid, splits);
         this.splits.addAll(splits);
+        this.pendingSplits.addAll(splits);
+        // TODO: handle case when reader is started but client is not connected when we
+        // attempt to add subs.
+        if (client != null && client.isConnected()) {
+            Iterator<EMQXSourceSplit> iter = this.pendingSplits.iterator();
+            EMQXSourceSplit split;
+            while (iter.hasNext()) {
+                split = iter.next();
+                if (subscribeToTopic(client, split.topic, split.qos)) {
+                    iter.remove();
+                } else {
+                    // TODO: schedule retry
+                }
+            }
+        }
     }
 
     @Override
@@ -223,7 +256,7 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
 
     @Override
     public List<EMQXSourceSplit> snapshotState(long checkpointId) {
-        LOG.debug("snapshotState: checkpointId: {}; splits: {}", checkpointId, splits);
+        LOG.debug("snapshotState: checkpointId: {}; splits: {}; msgs to ack: {}", checkpointId, splits, msgsToAck);
         List<Tuple2<Integer, Integer>> msgsToAckTmp = new ArrayList<>(this.msgsToAck);
         synchronized (checkpointsToMsgsToAck) {
             if (msgsToAckTmp.size() > 0) {

@@ -6,6 +6,9 @@ import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+
+import java.util.List;
+
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.api.java.typeutils.ResultTypeQueryable;
@@ -25,35 +28,31 @@ public class EMQXSource<OUT>
     protected String baseClientid;
     protected String username;
     protected String password;
-    protected String groupName;
-    protected String topicFilter;
-    protected int qos;
     protected DeserializationSchema<OUT> deserializer;
+    protected List<Subscription> subscriptions;
 
-    public EMQXSource(String brokerHost, int brokerPort, String baseClientid, String groupName, String topicFilter, int qos,
+    public EMQXSource(String brokerHost, int brokerPort, String baseClientid, List<Subscription> subscriptions,
             DeserializationSchema<OUT> deserializer) {
-        this(brokerHost, brokerPort, baseClientid, null, null, groupName, topicFilter, qos, deserializer);
+        this(brokerHost, brokerPort, baseClientid, null, null, subscriptions, deserializer);
     }
 
     public EMQXSource(String brokerHost, int brokerPort, String baseClientid, String username, String password,
-            String groupName, String topicFilter, int qos, DeserializationSchema<OUT> deserializer) {
-        Preconditions.checkArgument(0 <= qos && qos <= 2, "invalid qos: %", qos);
-        // TODO: validate group name and clientid
+            List<Subscription> subscriptions, DeserializationSchema<OUT> deserializer) {
+        // TODO: validate clientid
         this.brokerHost = brokerHost;
         this.brokerPort = brokerPort;
         this.baseClientid = baseClientid;
         this.username = username;
         this.password = password;
-        this.groupName = groupName;
-        this.topicFilter = topicFilter;
-        this.qos = qos;
         this.deserializer = deserializer;
+        this.subscriptions = subscriptions;
     }
 
     @Override
     public SplitEnumerator<EMQXSourceSplit, EMQXCheckpoint> createEnumerator(
             SplitEnumeratorContext<EMQXSourceSplit> context) throws Exception {
-        return new EMQXSplitEnumerator(context, baseClientid);
+        LOG.info("creating enumerator with base clientid {} and subscriptions {}", baseClientid, subscriptions);
+        return new EMQXSplitEnumerator(context, baseClientid, subscriptions);
     }
 
     @Override
@@ -70,14 +69,14 @@ public class EMQXSource<OUT>
     public SourceReader<EMQXMessage<OUT>, EMQXSourceSplit> createReader(SourceReaderContext context) throws Exception {
         int subTaskId = context.getIndexOfSubtask();
         String newClientid = mkClientid(baseClientid, subTaskId);
-        LOG.debug("Starting Source Reader; clientid: {}; group name: {}", newClientid, groupName);
-        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password, groupName, topicFilter, qos, deserializer);
+        LOG.debug("Creating Source Reader; clientid: {}", newClientid);
+        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password, deserializer);
     }
 
     @Override
     public SimpleVersionedSerializer<EMQXCheckpoint> getEnumeratorCheckpointSerializer() {
         LOG.debug("getEnumeratorCheckpointSerializer");
-        return new SimpleSerializer<EMQXCheckpoint>();
+        return new CheckpointSerializer();
     }
 
     @Override
@@ -90,8 +89,9 @@ public class EMQXSource<OUT>
     @Override
     public SplitEnumerator<EMQXSourceSplit, EMQXCheckpoint> restoreEnumerator(
             SplitEnumeratorContext<EMQXSourceSplit> enumContext, EMQXCheckpoint checkpoint) throws Exception {
-        LOG.debug("restoreEnumerator");
-        return null;
+        LOG.debug("restoreEnumerator: {} {}\n  {}", enumContext, checkpoint, enumContext.registeredReaders());
+        return new EMQXSplitEnumerator(enumContext, baseClientid, checkpoint.repeatableSubs,
+                checkpoint.pendingNonRepeatableSubs, checkpoint.assignedReaders);
     }
 
     static public String mkClientid(String baseClientid, int subTaskId) {

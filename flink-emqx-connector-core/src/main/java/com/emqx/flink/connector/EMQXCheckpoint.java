@@ -1,16 +1,20 @@
 package com.emqx.flink.connector;
 
 import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
 
 public class EMQXCheckpoint implements Serializable {
-    private long checkpointId;
+    protected List<Subscription> repeatableSubs;
+    protected List<Subscription> pendingNonRepeatableSubs;
+    protected Map<Integer, List<Subscription>> assignedReaders;
 
-    EMQXCheckpoint(long checkpointId) {
-        this.checkpointId = checkpointId;
-    }
-
-    @Override
-    public String toString() {
-        return String.format("EMQXCheckpoint(%d)", checkpointId);
+    EMQXCheckpoint(
+            List<Subscription> repeatableSubs,
+            List<Subscription> pendingNonRepeatableSubs,
+            Map<Integer, List<Subscription>> assignedReaders) {
+        this.repeatableSubs = repeatableSubs;
+        this.pendingNonRepeatableSubs = pendingNonRepeatableSubs;
+        this.assignedReaders = assignedReaders;
     }
 }

@@ -14,21 +14,18 @@ import org.slf4j.LoggerFactory;
 public class CrashingTestEMQXSource<OUT> extends EMQXSource<OUT> {
     private static final Logger LOG = LoggerFactory.getLogger(CrashingTestEMQXSource.class);
 
-    CrashingTestEMQXSource(String brokerHost, int brokerPort, String baseClientid, String groupName, String topicFilter,
-            int qos,
+    CrashingTestEMQXSource(String brokerHost, int brokerPort, String baseClientid,
+            List<Subscription> subscriptions,
             DeserializationSchema<OUT> deserializer) {
-        super(brokerHost, brokerPort, baseClientid, groupName,
-                topicFilter,
-                qos,
-                deserializer);
+        super(brokerHost, brokerPort, baseClientid, subscriptions, deserializer);
     }
 
     @Override
     public SourceReader<EMQXMessage<OUT>, EMQXSourceSplit> createReader(SourceReaderContext context) throws Exception {
         int subTaskId = context.getIndexOfSubtask();
         String newClientid = mkClientid(baseClientid, subTaskId);
-        LOG.debug("Starting Crashing Source Reader; clientid: {}; group name: {}", newClientid, groupName);
-        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password, groupName, topicFilter, qos,
+        LOG.debug("Starting Crashing Source Reader; clientid: {}", newClientid);
+        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password,
                 deserializer) {
             @Override
             public List<EMQXSourceSplit> snapshotState(long checkpointId) {
