@@ -15,7 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class EMQXSplitSerializer implements SimpleVersionedSerializer<EMQXSourceSplit> {
-    private static final Logger LOG = LoggerFactory.getLogger(SimpleSerializer.class);
+    private static final Logger LOG = LoggerFactory.getLogger(EMQXSplitSerializer.class);
     private static final int VERSION = 0;
 
     @Override
@@ -27,7 +27,9 @@ public class EMQXSplitSerializer implements SimpleVersionedSerializer<EMQXSource
     public byte[] serialize(EMQXSourceSplit split) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 DataOutputStream out = new DataOutputStream(baos)) {
-            out.writeUTF(split.getClientid());
+            out.writeUTF(split.clientid);
+            out.writeUTF(split.topic);
+            out.writeInt(split.qos);
             out.flush();
             return baos.toByteArray();
         }
@@ -39,7 +41,9 @@ public class EMQXSplitSerializer implements SimpleVersionedSerializer<EMQXSource
         try (ByteArrayInputStream bais = new ByteArrayInputStream(serialized);
                 DataInputStream in = new DataInputStream(bais)) {
             String clientid = in.readUTF();
-            return new EMQXSourceSplit(clientid);
+            String topic = in.readUTF();
+            int qos = in.readInt();
+            return new EMQXSourceSplit(clientid, topic, qos);
         }
     }
 }

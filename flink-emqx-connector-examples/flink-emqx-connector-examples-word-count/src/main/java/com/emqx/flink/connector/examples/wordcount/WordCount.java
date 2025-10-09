@@ -1,5 +1,8 @@
 package com.emqx.flink.connector.examples.wordcount;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
@@ -12,6 +15,8 @@ import org.apache.flink.util.ParameterTool;
 
 import com.emqx.flink.connector.EMQXMessage;
 import com.emqx.flink.connector.EMQXSource;
+import com.emqx.flink.connector.SharedSubscription;
+import com.emqx.flink.connector.Subscription;
 
 public class WordCount {
     public static void main(String[] args) throws Exception {
@@ -29,8 +34,11 @@ public class WordCount {
         // Flink environment setup
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
+        List<Subscription> subscriptions = new ArrayList<>();
+        subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
         DeserializationSchema<String> deserializer = new StringDeserializer();
-        EMQXSource<String> emqx = new EMQXSource<>(brokerHost, brokerPort, clientid, userName, password, groupName, topicFilter, qos,
+        EMQXSource<String> emqx = new EMQXSource<>(brokerHost, brokerPort, clientid, userName, password,
+                subscriptions,
                 deserializer);
         DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqx, WatermarkStrategy.noWatermarks(), "emqx");
         KeyedStream<Tuple2<String, Integer>, String> keyedStream = source

@@ -1,9 +1,17 @@
 package com.emqx.flink.connector;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpClient.Version;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -12,7 +20,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -38,7 +45,7 @@ import org.eclipse.paho.mqttv5.common.MqttMessage;
 import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
 
 import org.testcontainers.containers.wait.strategy.Wait;
-
+import org.testcontainers.images.builder.Transferable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.flink.api.common.JobID;
@@ -47,6 +54,7 @@ import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.function.SupplierWithException;
+import org.assertj.core.util.Arrays;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.source.SplitEnumerator;
@@ -72,9 +80,12 @@ class EMQXSourceIntegrationTests {
 
         @Container
         public static final GenericContainer emqx = new GenericContainer(
-                        DockerImageName.parse("emqx/emqx-enterprise:5.10.0"))
+                        DockerImageName.parse("emqx/emqx-enterprise:6.0.0"))
                         .withExposedPorts(18083, 1883)
                         .withEnv("EMQX_LOG__CONSOLE_HANDLER__LEVEL", "debug")
+                        .withEnv("EMQX_MQ__ENABLE", "true")
+                        .withCopyToContainer(Transferable.of("test:secret"), "/etc/emqx/bootstrap.txt")
+                        .withEnv("EMQX_API_KEY__BOOTSTRAP_FILE", "/etc/emqx/bootstrap.txt")
                         .waitingFor(Wait.forHttp("/status").forPort(18083));
 
         @ClassRule
@@ -90,6 +101,29 @@ class EMQXSourceIntegrationTests {
 
         String mkGroupName() {
                 return String.format("gname%d", testCount.get());
+        }
+
+        void warnBanner(String message) {
+                String border = "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n";
+                LOG.warn(border + message + border);
+        }
+
+        void setupEMQXQueue() throws Exception {
+                HttpClient client = HttpClient.newBuilder().version(Version.HTTP_1_1).build();
+                String auth = Base64.getEncoder().encodeToString("test:secret".getBytes());
+                URI uri = new URI(String.format("http://%s:%d/api/v5/message_queues/queues",
+                                emqx.getHost(),
+                                emqx.getMappedPort(18083)));
+                HttpRequest req = HttpRequest
+                                .newBuilder(uri)
+                                .header("Authorization", "Basic " + auth)
+                                .header("Content-Type", "application/json")
+                                .POST(HttpRequest.BodyPublishers.ofString(
+                                                "{\"topic_filter\": \"queue/#\", \"is_lastvalue\": false}"))
+                                .build();
+                HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                LOG.info("create queue response: {} {}", resp.statusCode(), resp.body());
+                assertEquals(200, resp.statusCode());
         }
 
         void waitUntilRunning(JobClient jobClient) throws Exception {
@@ -129,7 +163,8 @@ class EMQXSourceIntegrationTests {
 
                         @Override
                         public void messageArrived(String topic, MqttMessage message) throws Exception {
-                                LOG.info("Test client received: topic={}, payload={}", topic, new String(message.getPayload()));
+                                LOG.info("Test client received: topic={}, payload={}", topic,
+                                                new String(message.getPayload()));
                         }
 
                         @Override
@@ -171,11 +206,12 @@ class EMQXSourceIntegrationTests {
                 String groupName = mkGroupName();
                 String topicFilter = "t/#";
                 int qos = 1;
+                List<Subscription> subscriptions = new ArrayList<>();
+                subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
                 StringDeserializer deserializer = new StringDeserializer();
 
-                EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid, groupName,
-                                topicFilter,
-                                qos,
+                EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid,
+                                subscriptions,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),
@@ -185,7 +221,7 @@ class EMQXSourceIntegrationTests {
                 JobClient jobClient = env.executeAsync();
 
                 waitUntilRunning(jobClient);
-                // Thread.sleep(1000);  // Give more time for MQTT connection to stabilize
+                // Thread.sleep(1000); // Give more time for MQTT connection to stabilize
 
                 MqttAsyncClient client = startClient(brokerHost, brokerPort);
                 String topic = "t/1";
@@ -198,7 +234,8 @@ class EMQXSourceIntegrationTests {
                         message.setQos(qos);
                         client.publish(topic, message).waitForCompletion();
                 }
-                // With Paho auto-ack, we expect at least 3 messages (shared subscription distributes them)
+                // With Paho auto-ack, we expect at least 3 messages (shared subscription
+                // distributes them)
                 CommonTestUtils.waitUntilCondition(() -> sink.getCount() >= 3, 500L, 10);
 
                 jobClient.cancel().join();
@@ -210,17 +247,19 @@ class EMQXSourceIntegrationTests {
         public void stopWithSavepoint() throws Exception {
                 final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
                 env.setParallelism(3);
+
                 String brokerHost = emqx.getHost();
                 int brokerPort = emqx.getMappedPort(1883);
                 String clientid = mkClientid();
                 String groupName = mkGroupName();
                 String topicFilter = "t/#";
                 int qos = 1;
+                List<Subscription> subscriptions = new ArrayList<>();
+                subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
                 StringDeserializer deserializer = new StringDeserializer();
 
-                EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid, groupName,
-                                topicFilter,
-                                qos,
+                EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid,
+                                subscriptions,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),
@@ -249,11 +288,36 @@ class EMQXSourceIntegrationTests {
                                 .get();
                 client.disconnect().waitForCompletion();
                 client.close();
+
+                // Uncomment to explore checkpoint; note that final condition does not
+                // hold, as the savepoint itself is a checkpoint, and thus ack any pending
+                // messages.
+
+                // warnBanner("Restoring checkpoint");
+                // final StreamExecutionEnvironment env2 =
+                // StreamExecutionEnvironment.getExecutionEnvironment();
+                // env2.setParallelism(3);
+                // Configuration config = new Configuration();
+                // config.set(StateRecoveryOptions.SAVEPOINT_PATH, savepointPath);
+                // env2.configure(config);
+
+                // DataStreamSource<EMQXMessage<String>> source2 = env2.fromSource(emqxSource,
+                // WatermarkStrategy.noWatermarks(),
+                // "emqx");
+                // CollectSink<EMQXMessage<String>> sink2 = new
+                // CollectSink<EMQXMessage<String>>();
+                // source2.sinkTo(sink2);
+                // JobClient jobClient2 = env2.executeAsync();
+                // CommonTestUtils.waitUntilCondition(() -> sink.getCount() == msgs.size(),
+                // 500L, 5);
+
+                // jobClient2.cancel().join();
         }
 
         @ParameterizedTest(name = "Message QoS = {arguments}")
         // N.B.: At the time of writing, paho mqtt client manual acknowledgement is
-        // totally broken for QoS 2, hence we don't test QoS 2 here.  When it's fixed, use
+        // totally broken for QoS 2, hence we don't test QoS 2 here. When it's fixed,
+        // use
         // the following line to test QoS recovery.
         // @ValueSource(ints = { 1, 2 })
         @ValueSource(ints = { 1 })
@@ -265,12 +329,12 @@ class EMQXSourceIntegrationTests {
                 String clientid = mkClientid();
                 String groupName = mkGroupName();
                 String topicFilter = "t/#";
+                List<Subscription> subscriptions = new ArrayList<>();
+                subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
                 StringDeserializer deserializer = new StringDeserializer();
 
                 EMQXSource<String> emqxSource = new CrashingTestEMQXSource<String>(brokerHost, brokerPort, clientid,
-                                groupName,
-                                topicFilter,
-                                qos,
+                                subscriptions,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),
@@ -299,9 +363,7 @@ class EMQXSourceIntegrationTests {
                 client.close();
 
                 // Trigger crash by checkpointing
-                LOG.warn(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-                LOG.warn("triggering crash by stopping with savepoint");
-                LOG.warn(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+                warnBanner("triggering crash by stopping with savepoint");
                 assertThrows(ExecutionException.class,
                                 () -> jobClient.stopWithSavepoint(
                                                 false,
@@ -310,9 +372,7 @@ class EMQXSourceIntegrationTests {
                                                 .get());
                 jobClient.cancel().join();
 
-                LOG.warn(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-                LOG.warn("starting new job");
-                LOG.warn(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+                warnBanner("starting new job");
                 StreamExecutionEnvironment env2 = StreamExecutionEnvironment.getExecutionEnvironment();
                 env2.setParallelism(1);
                 // Cannot continue from a savepoint because checkpointing crashed.
@@ -349,13 +409,13 @@ class EMQXSourceIntegrationTests {
                         String clientid = mkClientid();
                         String groupName = mkGroupName();
                         String topicFilter = "t/#";
+                        List<Subscription> subscriptions = new ArrayList<>();
+                        subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
                         StringDeserializer deserializer = new StringDeserializer();
 
                         EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort,
                                         clientid,
-                                        groupName,
-                                        topicFilter,
-                                        qos,
+                                        subscriptions,
                                         deserializer);
                         DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                         WatermarkStrategy.noWatermarks(),
@@ -364,11 +424,11 @@ class EMQXSourceIntegrationTests {
                         source.sinkTo(sink);
                         JobClient jobClient = env.executeAsync();
 
-                        Thread.sleep(2_000L);  // Wait longer for reconnection attempts
+                        Thread.sleep(2_000L); // Wait longer for reconnection attempts
 
                         emqx.getDockerClient().unpauseContainerCmd(emqx.getContainerId()).exec();
 
-                        // Thread.sleep(2_000L);  // Give time for MQTT to reconnect
+                        // Thread.sleep(2_000L); // Give time for MQTT to reconnect
 
                         waitUntilRunning(jobClient);
 
@@ -377,7 +437,7 @@ class EMQXSourceIntegrationTests {
                         // Subscribe for debugging
                         client.subscribe(topicFilter, qos).waitForCompletion();
 
-                        // Thread.sleep(500);  // Let subscription stabilize
+                        // Thread.sleep(500); // Let subscription stabilize
 
                         List<String> msgs = IntStream.range(0, 10).mapToObj(String::valueOf)
                                         .collect(Collectors.toList());
@@ -401,5 +461,80 @@ class EMQXSourceIntegrationTests {
                                 }
                         }
                 }
+        }
+
+        @Test
+        public void multipleSubscriptionKinds() throws Exception {
+                setupEMQXQueue();
+
+                final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+                env.setParallelism(3);
+                String brokerHost = emqx.getHost();
+                int brokerPort = emqx.getMappedPort(1883);
+                int qos = 1;
+                String clientid = mkClientid();
+                String groupName = mkGroupName();
+                List<Subscription> subscriptions = new ArrayList<>();
+                String sharedSub = "shared/#";
+                String queueSub = "queue/#";
+                subscriptions.add(new SharedSubscription(groupName, sharedSub, qos));
+                subscriptions.add(new QueueSubscription(queueSub, qos));
+                // These subscriptions are not repeatable.
+                String[] uniqueSubs = { "t/1", "t/2", "t/3" };
+                for (String uniqueSub : uniqueSubs) {
+                        subscriptions.add(new SimpleSubscription(uniqueSub, qos));
+                }
+                StringDeserializer deserializer = new StringDeserializer();
+
+                EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort,
+                                clientid,
+                                subscriptions,
+                                deserializer);
+                DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
+                                WatermarkStrategy.noWatermarks(),
+                                "emqx");
+                CollectSink<EMQXMessage<String>> sink = new CollectSink<EMQXMessage<String>>();
+                source.sinkTo(sink);
+                JobClient jobClient = env.executeAsync();
+
+                waitUntilRunning(jobClient);
+
+                MqttAsyncClient client = startClient(brokerHost, brokerPort);
+                // Subscribe for debugging
+                client.subscribe(sharedSub, qos).waitForCompletion();
+                client.subscribe(queueSub, qos).waitForCompletion();
+                client.subscribe("t/#", qos).waitForCompletion();
+
+                // Messages meant for shared subscription
+                List<String> msgs1 = IntStream.range(0, 10).mapToObj(String::valueOf).collect(Collectors.toList());
+                for (String msg : msgs1) {
+                        MqttMessage message = new MqttMessage(msg.getBytes());
+                        message.setQos(qos);
+                        client.publish(String.format("shared/%s", msg), message).waitForCompletion();
+                }
+                // Messages meant for queue subscription
+                List<String> msgs2 = IntStream.range(10, 20).mapToObj(String::valueOf).collect(Collectors.toList());
+                for (String msg : msgs2) {
+                        MqttMessage message = new MqttMessage(msg.getBytes());
+                        message.setQos(qos);
+                        client.publish(String.format("queue/%s", msg), message).waitForCompletion();
+                }
+                // Messages meant for unique subscriptions
+                List<Integer> msgs3 = IntStream.range(20, 30).mapToObj((n) -> n).collect(Collectors.toList());
+                for (Integer msg : msgs3) {
+                        MqttMessage message = new MqttMessage(String.valueOf(msg).getBytes());
+                        message.setQos(qos);
+                        String t = String.format("t/%d", 1 + msg % uniqueSubs.length);
+                        client.publish(t, message).waitForCompletion();
+                }
+                int numAllMsgs = msgs1.size() + msgs2.size() + msgs3.size();
+
+                LOG.info("waiting for {} messages to be consumed", numAllMsgs);
+                // LOG.info("logs:\n  {}", emqx.getLogs());
+                CommonTestUtils.waitUntilCondition(() -> sink.getCount() == numAllMsgs, 500L, 5);
+
+                jobClient.cancel().join();
+                client.disconnect().waitForCompletion();
+                client.close();
         }
 }

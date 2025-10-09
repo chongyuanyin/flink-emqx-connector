@@ -5,22 +5,22 @@ import java.io.Serializable;
 import org.apache.flink.api.connector.source.SourceSplit;
 
 class EMQXSourceSplit implements SourceSplit, Serializable {
-    private String clientid;
+    protected String clientid;
+    protected String topic;
+    protected int qos;
 
-    EMQXSourceSplit(String clientid) {
+    EMQXSourceSplit(String clientid, String topic, int qos) {
         this.clientid = clientid;
-    }
-
-    public String getClientid() {
-        return this.clientid;
+        this.topic = topic;
+        this.qos = qos;
     }
 
     public String splitId() {
-        return this.clientid;
+        return this.clientid + ":" + String.valueOf(qos) + ":" + this.topic;
     }
 
     @Override
     public String toString() {
-        return String.format("EMQXSourceSplit(%s)", clientid);
+        return String.format("EMQXSourceSplit(%s, %s, %d)", clientid, topic, qos);
     }
 }
