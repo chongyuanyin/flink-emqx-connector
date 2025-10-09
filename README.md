@@ -1,6 +1,12 @@
 # Flink EMQX Connector
 
-## Building
+## Quick start
+
+See [`WordCount.java`](./flink-emqx-connector-examples/flink-emqx-connector-examples-word-count/src/main/java/com/emqx/flink/connector/examples/wordcount/WordCount.java) for a simple example to get started.
+
+## Developing
+
+### Building
 
 ```sh
 mvn clean package
@@ -8,7 +14,7 @@ mvn clean package
 mvn clean package -DskipTests
 ```
 
-## Testing
+### Testing
 
 ```sh
 mvn clean test
