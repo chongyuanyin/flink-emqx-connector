@@ -17,7 +17,7 @@ public class CrashingTestEMQXSource<OUT> extends EMQXSource<OUT> {
     CrashingTestEMQXSource(String brokerHost, int brokerPort, String baseClientid,
             List<Subscription> subscriptions,
             DeserializationSchema<OUT> deserializer) {
-        super(brokerHost, brokerPort, baseClientid, subscriptions, deserializer);
+        super(brokerHost, brokerPort, baseClientid, subscriptions, SslOption.SSL_DISABLED, null, null, null, deserializer);
     }
 
     @Override
@@ -26,7 +26,7 @@ public class CrashingTestEMQXSource<OUT> extends EMQXSource<OUT> {
         String newClientid = mkClientid(baseClientid, subTaskId);
         LOG.debug("Starting Crashing Source Reader; clientid: {}", newClientid);
         return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password,
-                deserializer) {
+            SslOption.SSL_DISABLED, null, null, null, deserializer) {
             @Override
             public List<EMQXSourceSplit> snapshotState(long checkpointId) {
                 LOG.warn("going to crash now");

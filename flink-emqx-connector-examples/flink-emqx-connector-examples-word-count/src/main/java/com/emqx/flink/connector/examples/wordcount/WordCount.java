@@ -16,6 +16,7 @@ import org.apache.flink.util.ParameterTool;
 import com.emqx.flink.connector.EMQXMessage;
 import com.emqx.flink.connector.EMQXSource;
 import com.emqx.flink.connector.SharedSubscription;
+import com.emqx.flink.connector.SslOption;
 import com.emqx.flink.connector.Subscription;
 
 public class WordCount {
@@ -38,7 +39,7 @@ public class WordCount {
         subscriptions.add(new SharedSubscription(groupName, topicFilter, qos));
         DeserializationSchema<String> deserializer = new StringDeserializer();
         EMQXSource<String> emqx = new EMQXSource<>(brokerHost, brokerPort, clientid, userName, password,
-                subscriptions,
+                subscriptions, SslOption.SSL_DISABLED, null, null, null,
                 deserializer);
         DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqx, WatermarkStrategy.noWatermarks(), "emqx");
         KeyedStream<Tuple2<String, Integer>, String> keyedStream = source

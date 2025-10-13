@@ -211,7 +211,8 @@ class EMQXSourceIntegrationTests {
                 StringDeserializer deserializer = new StringDeserializer();
 
                 EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid,
-                                subscriptions,
+                                subscriptions, 
+                                SslOption.SSL_DISABLED, null, null, null,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),
@@ -259,7 +260,8 @@ class EMQXSourceIntegrationTests {
                 StringDeserializer deserializer = new StringDeserializer();
 
                 EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort, clientid,
-                                subscriptions,
+                                subscriptions, 
+                                SslOption.SSL_DISABLED, null, null, null,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),
@@ -415,7 +417,8 @@ class EMQXSourceIntegrationTests {
 
                         EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort,
                                         clientid,
-                                        subscriptions,
+                                        subscriptions, 
+                                        SslOption.SSL_DISABLED, null, null, null,
                                         deserializer);
                         DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                         WatermarkStrategy.noWatermarks(),
@@ -488,7 +491,8 @@ class EMQXSourceIntegrationTests {
 
                 EMQXSource<String> emqxSource = new EMQXSource<String>(brokerHost, brokerPort,
                                 clientid,
-                                subscriptions,
+                                subscriptions, 
+                                SslOption.SSL_DISABLED, null, null, null,
                                 deserializer);
                 DataStreamSource<EMQXMessage<String>> source = env.fromSource(emqxSource,
                                 WatermarkStrategy.noWatermarks(),

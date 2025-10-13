@@ -28,16 +28,21 @@ public class EMQXSource<OUT>
     protected String baseClientid;
     protected String username;
     protected String password;
+    protected SslOption sslOption = SslOption.SSL_DISABLED;
+    protected String brokerCaFile;
+    protected String connectorCrtFile;
+    protected String connectorKeyFile;
     protected DeserializationSchema<OUT> deserializer;
     protected List<Subscription> subscriptions;
 
     public EMQXSource(String brokerHost, int brokerPort, String baseClientid, List<Subscription> subscriptions,
-            DeserializationSchema<OUT> deserializer) {
-        this(brokerHost, brokerPort, baseClientid, null, null, subscriptions, deserializer);
+        SslOption sslOption, String brokerCaFile, String connectorCrtFile, String connectorKeyFile, DeserializationSchema<OUT> deserializer) {
+        this(brokerHost, brokerPort, baseClientid, null, null, subscriptions, sslOption, brokerCaFile, connectorCrtFile, connectorKeyFile, deserializer);
     }
 
     public EMQXSource(String brokerHost, int brokerPort, String baseClientid, String username, String password,
-            List<Subscription> subscriptions, DeserializationSchema<OUT> deserializer) {
+            List<Subscription> subscriptions, SslOption sslOption, String brokerCaFile, String connectorCrtFile, 
+            String connectorKeyFile, DeserializationSchema<OUT> deserializer) {
         // TODO: validate clientid
         this.brokerHost = brokerHost;
         this.brokerPort = brokerPort;
@@ -46,6 +51,10 @@ public class EMQXSource<OUT>
         this.password = password;
         this.deserializer = deserializer;
         this.subscriptions = subscriptions;
+        this.sslOption = sslOption;
+        this.brokerCaFile = brokerCaFile;
+        this.connectorCrtFile = connectorCrtFile;
+        this.connectorKeyFile = connectorKeyFile;
     }
 
     @Override
@@ -70,7 +79,7 @@ public class EMQXSource<OUT>
         int subTaskId = context.getIndexOfSubtask();
         String newClientid = mkClientid(baseClientid, subTaskId);
         LOG.debug("Creating Source Reader; clientid: {}", newClientid);
-        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password, deserializer);
+        return new EMQXSourceReader<>(context, brokerHost, brokerPort, newClientid, username, password, sslOption, brokerCaFile, connectorCrtFile, connectorKeyFile, deserializer);
     }
 
     @Override

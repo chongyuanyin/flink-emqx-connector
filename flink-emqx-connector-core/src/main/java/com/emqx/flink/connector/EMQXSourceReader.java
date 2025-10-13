@@ -1,6 +1,18 @@
 package com.emqx.flink.connector;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
 import java.io.IOException;
+import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.Security;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -11,6 +23,16 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
+
+import java.security.cert.Certificate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,9 +54,12 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.core.io.InputStatus;
 import org.apache.flink.streaming.runtime.io.MultipleFuturesAvailabilityHelper;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
 
 public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQXSourceSplit> {
     private static final Logger LOG = LoggerFactory.getLogger(EMQXSourceReader.class);
+    private static final String TLS_PROTOCOL = "TLSv1.2";
 
     // {qos, messageId, msg}
     private Queue<Tuple3<Integer, Integer, EMQXMessage<OUT>>> queue = new ConcurrentLinkedQueue<>();
@@ -47,6 +72,10 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
     private String clientid;
     private String username;
     private String password;
+    private SslOption sslOption;
+    private String brokerCaFile;
+    private String connectorCrtFile;
+    private String connectorKeyFile;
     private DeserializationSchema<OUT> deserializer;
     private List<EMQXSourceSplit> splits = new ArrayList<>();
     private List<EMQXSourceSplit> pendingSplits = new ArrayList<>();
@@ -56,14 +85,18 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
 
     EMQXSourceReader(
             SourceReaderContext context, String brokerHost, int brokerPort, String clientid,
-            String username, String password,
-            DeserializationSchema<OUT> deserializer) {
+            String username, String password, SslOption sslOption, String brokerCaFile, 
+            String connectorCrtFile, String connectorKeyFile, DeserializationSchema<OUT> deserializer) {
         this.context = context;
         this.brokerHost = brokerHost;
         this.brokerPort = brokerPort;
         this.clientid = clientid;
         this.username = username;
         this.password = password;
+        this.sslOption = sslOption;
+        this.brokerCaFile = brokerCaFile;
+        this.connectorCrtFile = connectorCrtFile;
+        this.connectorKeyFile = connectorKeyFile;
         this.deserializer = deserializer;
         this.checkpointsToMsgsToAck = Collections.synchronizedSortedMap(new TreeMap<>());
     }
@@ -90,9 +123,13 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
     }
 
     MqttAsyncClient startClient(String host, int port, String clientid, String username, String password,
-            DeserializationSchema<OUT> deserializer) throws MqttException {
+            DeserializationSchema<OUT> deserializer) throws Exception {
 
-        String broker = String.format("tcp://%s:%d", host, port);
+        String schema = "tcp";
+        if (sslOption == SslOption.SSL_VERIFY_NONE || sslOption == SslOption.SSL_VERIFY_PEER) {
+            schema = "ssl";
+        }
+        String broker = String.format("%s://%s:%d", schema, host, port);
         MqttAsyncClient client = new MqttAsyncClient(broker, clientid);
 
         // Set callback for incoming messages
@@ -130,11 +167,94 @@ public class EMQXSourceReader<OUT> implements SourceReader<EMQXMessage<OUT>, EMQ
 
         client.setManualAcks(true);
 
+        // TLS support
+        SSLSocketFactory sslFactory = null;
+        KeyManager[] keyManagers = null;
+        TrustManager[] trustManagers = null;
+        try {
+            if (sslOption == SslOption.SSL_VERIFY_NONE || sslOption == SslOption.SSL_VERIFY_PEER) {
+                Security.addProvider(new BouncyCastleProvider());
+                // connector should send its cert (with key) to broker for verification
+                KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+                keyStore.load(null, null);
+    
+                PrivateKey privateKey = SSLUtil.getPrivateKey(new File(connectorKeyFile));
+                List<Certificate> certChain = SSLUtil.getCertChain(new File(connectorCrtFile));
+    
+                keyStore.setKeyEntry("connector-private-key", privateKey, SSLUtil.getDefaultKeyStorePassword(),
+                    certChain.toArray(new Certificate[0]));
+                
+                KeyManagerFactory kmFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                kmFactory.init(keyStore, SSLUtil.getDefaultKeyStorePassword());
+                keyManagers = kmFactory.getKeyManagers();
+    
+                if (sslOption == SslOption.SSL_VERIFY_PEER) {
+                    // connector should verify broker's identity
+                    if (brokerCaFile != null) {
+                        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+                        try (InputStream is = new FileInputStream(brokerCaFile)) {
+                            trustStore.load(is, null);
+                        }
+                        TrustManagerFactory tmFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                        tmFactory.init(trustStore);
+                        trustManagers = tmFactory.getTrustManagers();
+                    } else {
+                        throw new Exception("Broker CA file is not provided");
+                    }
+                } else {
+                    // connector trust any broker's identity
+                    trustManagers = new TrustManager[]{
+                        new X509TrustManager() {
+                            @Override
+                            public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+                                return;
+                            }
+                            
+                            @Override
+                            public void checkClientTrusted(X509Certificate[] chain, String authType)
+                                    throws CertificateException {
+                                return;
+                            }
+                            @Override
+                            public X509Certificate[] getAcceptedIssuers() {
+                                return new X509Certificate[0];
+                            }
+                        }
+                    };
+                }
+
+                SSLContext sslContext = SSLContext.getInstance(TLS_PROTOCOL);
+                sslContext.init(keyManagers, trustManagers, null);
+                sslFactory = sslContext.getSocketFactory();
+            }            
+        } catch(Exception e) {
+            throw e;
+        }
+        
+        // if (tlsEnabled && caFile != null) {
+        //     try {
+        //         KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        //         try (InputStream is = new FileInputStream(caFile)) {
+        //             trustStore.load(is, null);
+        //         }
+    
+        //         TrustManagerFactory tmFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        //         tmFactory.init(trustStore);
+    
+        //         SSLContext sslContext = SSLContext.getInstance(TLS_PROTOCOL);
+        //         sslContext.init(null, tmFactory.getTrustManagers(), null);
+        //         sslFactory = sslContext.getSocketFactory();
+        //     } 
+        // }
+
         // Configure connection options
         MqttConnectionOptions options = new MqttConnectionOptions();
         options.setCleanStart(false);
         options.setSessionExpiryInterval(60L);
         options.setAutomaticReconnect(true);
+        if (sslFactory != null) {
+            options.setSocketFactory(sslFactory);
+        }
 
         // Only set auth if username and password are provided
         if (username != null && !username.isEmpty() && password != null && !password.isEmpty()) {
